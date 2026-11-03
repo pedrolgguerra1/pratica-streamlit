@@ -1,7 +1,6 @@
 import copy
 import glob
 import os
-
 import kagglehub
 import matplotlib.path as mpath
 import matplotlib.pyplot as plt
@@ -22,10 +21,13 @@ def _corrigir_deepcopy_path(self, memo=None):
     p._readonly = False
     return p
 
+mpath.Path.__deepcopy__ = _corrigir_deepcopy_path
+
 st.set_page_config(
     page_title="EDA — Saúde de Baterias de VEs",
     page_icon="🔋",
     layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 COR_NEUTRA = "lightgray"
@@ -35,22 +37,10 @@ COR_ALERTA = "#ef4444"
 PALETA_ESTADO = {"Saudável": COR_CONTEXTO, "Degradada": COR_DESTAQUE}
 
 sns.set_theme(style="whitegrid")
-plt.rcParams["figure.figsize"] = (10, 4.5)
 
 KAGGLE_DATASET = "srisyra02/ev-battery-health-prediction-dataset-20k"
-VARS_QUANT_PADRAO = [
-    "battery_capacity_kwh",
-    "odometer_km",
-    "cycle_count",
-    "cell_voltage_avg",
-    "temperature_variance",
-    "battery_stress_index",
-    "predicted_remaining_life_cycles",
-    "battery_health_percent",
-]
 
-
-@st.cache_data(show_spinner="A descarregar o dataset do Kaggle...")
+@st.cache_data(show_spinner="A descarregar e a preparar o dataset do Kaggle...")
 def carregar_dados() -> pd.DataFrame:
     path = kagglehub.dataset_download(KAGGLE_DATASET)
     csv_files = glob.glob(os.path.join(path, "*.csv"))
@@ -66,236 +56,203 @@ def carregar_dados() -> pd.DataFrame:
             break
 
     if soh_col is not None:
-        df["estado_bateria"] = np.where(
-            df[soh_col] < 80.0, "Degradada", "Saudável"
-        )
+        df["estado_bateria"] = np.where(df[soh_col] < 80.0, "Degradada", "Saudável")
         df.loc[df[soh_col].isna(), "estado_bateria"] = np.nan
     elif "battery_failure" in df.columns:
-        df["estado_bateria"] = np.where(
-            df["battery_failure"] == 1, "Degradada", "Saudável"
-        )
+        df["estado_bateria"] = np.where(df["battery_failure"] == 1, "Degradada", "Saudável")
     else:
         df["estado_bateria"] = "Saudável"
 
+    cols_sensiveis = ["vehicle_id", "battery_serial"]
+    df.drop(columns=[c for c in cols_sensiveis if c in df.columns], inplace=True)
+
     return df
 
-
-def variaveis_numericas(df: pd.DataFrame) -> list[str]:
-    numericas = df.select_dtypes(include=[np.number]).columns.tolist()
-    prioridade = [c for c in VARS_QUANT_PADRAO if c in numericas]
-    restantes = [c for c in numericas if c not in prioridade]
-    return prioridade + restantes
-
-
-def aplicar_filtro(df: pd.DataFrame, coluna: str, intervalo: tuple[float, float]) -> pd.DataFrame:
-    minimo, maximo = intervalo
-    return df[df[coluna].between(minimo, maximo)]
-
-
-def figura_histograma(df: pd.DataFrame, coluna: str):
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4.2), sharex=True)
-    for ax, classe in zip(axes, ("Saudável", "Degradada")):
-        subset = df[df["estado_bateria"] == classe]
-        cor = PALETA_ESTADO[classe]
-        sns.histplot(subset, x=coluna, kde=True, color=cor, ax=ax)
-        ax.set_title(f"{coluna} — {classe}")
-        ax.set_ylabel("Frequência")
-    fig.suptitle("Distribuição por estado da bateria", fontsize=13)
-    fig.tight_layout()
-    return fig
-
-
-def figura_boxplot(df: pd.DataFrame, coluna: str):
-    fig, ax = plt.subplots(figsize=(8, 4.2))
-    sns.boxplot(
-        data=df,
-        x="estado_bateria",
-        y=coluna,
-        hue="estado_bateria",
-        palette=PALETA_ESTADO,
-        legend=False,
-        flierprops=dict(
-            markerfacecolor=COR_ALERTA,
-            markeredgecolor=COR_ALERTA,
-            marker="o",
-        ),
-        ax=ax,
-    )
-    ax.set_title(f"Boxplot de {coluna} por estado da bateria")
-    ax.set_xlabel("Estado da bateria")
-    fig.tight_layout()
-    return fig
-
-
-def figura_dispersao(df: pd.DataFrame, x: str, y: str):
-    amostra = df.sample(min(2500, len(df)), random_state=42) if len(df) > 2500 else df
-    fig, ax = plt.subplots(figsize=(9, 5))
-    sns.scatterplot(
-        data=amostra,
-        x=x,
-        y=y,
-        hue="estado_bateria",
-        palette=PALETA_ESTADO,
-        alpha=0.55,
-        ax=ax,
-    )
-    ax.set_title(f"Dispersão: {x} vs. {y}")
-    ax.legend(title="Estado da bateria")
-    fig.tight_layout()
-    return fig
-
-
-def figura_heatmap_fabricante(df: pd.DataFrame):
-    col_cat = (
-        "battery_manufacturer"
-        if "battery_manufacturer" in df.columns
-        else df.select_dtypes(exclude=[np.number]).columns[0]
-    )
-    contingencia = pd.crosstab(df[col_cat], df["estado_bateria"])
-    fig, ax = plt.subplots(figsize=(8, 5))
-    sns.heatmap(contingencia, annot=True, fmt="d", cmap="magma", ax=ax)
-    ax.set_title(f"{col_cat} × estado da bateria")
-    fig.tight_layout()
-    return fig, col_cat, contingencia
-
-
-st.title("Saúde de baterias de veículos elétricos")
-st.caption(
-    "Dashboard interativo da EDA sobre o conjunto "
-    "`srisyra02/ev-battery-health-prediction-dataset-20k`."
-)
-
 try:
-    df = carregar_dados()
+    df_raw = carregar_dados()
 except Exception as exc:
-    st.error(
-        "Não foi possível descarregar o dataset via kagglehub. "
-        "Confirme a ligação à internet. Se o Kaggle exigir consentimento, "
-        "configure as credenciais no ambiente."
-    )
+    st.error("Erro ao carregar os dados. Verifique a ligação à internet.")
     st.exception(exc)
     st.stop()
 
-numericas = variaveis_numericas(df)
-if not numericas:
-    st.error("O dataset não contém colunas numéricas para explorar.")
-    st.stop()
+todas_numericas = df_raw.select_dtypes(include=[np.number]).columns.tolist()
+vars_excluir = ["battery_failure", "manufacturing_year"]
+vars_quant = [c for c in todas_numericas if c not in vars_excluir]
 
-st.sidebar.header("Controlos")
-variavel = st.sidebar.selectbox("Seletor de variável", numericas, index=0)
+st.sidebar.header("⚙️ Painel de Controlo")
+st.sidebar.markdown("Filtros globais para a exploração e os dashboards.")
 
-serie = df[variavel].dropna()
-vmin, vmax = float(serie.min()), float(serie.max())
-if vmin == vmax:
-    vmax = vmin + 1.0
-
-intervalo = st.sidebar.slider(
-    "Intervalo da variável selecionada",
-    min_value=vmin,
-    max_value=vmax,
-    value=(vmin, vmax),
-    key=f"intervalo_{variavel}",
+vars_selecionadas = st.sidebar.multiselect(
+    "1. Selecione as Variáveis Quantitativas:",
+    options=vars_quant,
+    default=vars_quant[:5] if len(vars_quant) >= 5 else vars_quant,
+    help="Escolha as variáveis para análise no Laboratório e Mapas de Calor."
 )
 
-outras = [c for c in numericas if c != variavel]
-variavel_y = st.sidebar.selectbox(
-    "Variável do eixo Y (separador Relações)",
-    outras if outras else numericas,
-    index=0,
+st.sidebar.markdown("---")
+
+var_filtro = st.sidebar.selectbox(
+    "Variável de referência para o filtro:",
+    options=[c for c in ["odometer_km", "cycle_count", "battery_stress_index", "vehicle_age_years"] if c in df_raw.columns],
+    index=0
 )
 
-df_filtrado = aplicar_filtro(df, variavel, intervalo)
+min_val = float(df_raw[var_filtro].min())
+max_val = float(df_raw[var_filtro].max())
 
-n_total = len(df)
-n_filtrado = len(df_filtrado)
-contagem_estado = df_filtrado["estado_bateria"].value_counts(dropna=True)
+intervalo_slider = st.sidebar.slider(
+    f"2. Intervalo de exclusão ({var_filtro}):",
+    min_value=min_val,
+    max_value=max_val,
+    value=(min_val, max_val),
+    help="Deslize para restringir a amostra e excluir valores extremos da avaliação."
+)
 
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Registos filtrados", f"{n_filtrado:,}".replace(",", "."))
-col2.metric("% da amostra", f"{100 * n_filtrado / n_total:.1f}%")
-col3.metric("Saudável", int(contagem_estado.get("Saudável", 0)))
-col4.metric("Degradada (SoH < 80%)", int(contagem_estado.get("Degradada", 0)))
+df_filtrado = df_raw[
+    (df_raw[var_filtro] >= intervalo_slider[0]) & 
+    (df_raw[var_filtro] <= intervalo_slider[1])
+].copy()
 
-tab_dist, tab_rel = st.tabs(["Distribuições", "Relações"])
+st.sidebar.markdown("---")
+st.sidebar.caption(f"📊 **Registos ativos:** {len(df_filtrado):,} de {len(df_raw):,}")
 
-with tab_dist:
-    st.subheader("Análise univariada")
-    st.write(
-        "Este separador reproduz o princípio **distribucional** da EDA: "
-        "histograma por classe, boxplot com outliers (vermelho) e métricas robustas. "
-        "O alvo `estado_bateria` usa o limiar automotivo de fim de vida (SoH < 80%)."
+st.title("🔋 Plataforma de Telemetria e Saúde de Baterias de VEs")
+st.markdown("Análise exploratória avançada e monitoramento preditivo para frotas de veículos elétricos.")
+
+tab1, tab2 = st.tabs([
+    "🔬 Dashboard 1: Laboratório de Distribuição e Correlação",
+    "🚛 Dashboard 2: KPIs & Gestão de Frota (Público-Alvo)"
+])
+
+with tab1:
+    st.subheader("🔬 Laboratório de Análise de Distribuição e Correlação")
+    st.markdown(
+        "Explore a estrutura multivariada das variáveis operacionais. "
+        "Utilize o painel lateral para ajustar o recorte de dados."
     )
 
-    if df_filtrado[variavel].dropna().empty:
-        st.warning("Não há valores válidos desta variável no intervalo escolhido.")
+    if len(vars_selecionadas) < 2:
+        st.warning("⚠️ Selecione pelo menos **2 variáveis quantitativas** no painel lateral para habilitar o mapa de calor.")
     else:
-        st.pyplot(figura_histograma(df_filtrado, variavel), width="stretch")
-        st.pyplot(figura_boxplot(df_filtrado, variavel), width="stretch")
+        c_cor, c_desc = st.columns([1.1, 1])
 
-        estat = df_filtrado.groupby("estado_bateria", dropna=True)[variavel].agg(
-            ["count", "mean", "median", "std"]
-        )
-        estat["IQR"] = df_filtrado.groupby("estado_bateria", dropna=True)[variavel].apply(
-            lambda s: s.quantile(0.75) - s.quantile(0.25)
-        )
-        st.dataframe(estat.round(2), width="stretch")
+        with c_cor:
+            st.markdown("#### Mapas de Calor para Correlação")
+            metodo_corr = st.radio("Método:", ["pearson", "spearman"], horizontal=True, index=1)
+            
+            corr_mat = df_filtrado[vars_selecionadas].corr(method=metodo_corr)
+            fig_hm, ax_hm = plt.subplots(figsize=(6, 4.5))
+            mask = np.triu(np.ones_like(corr_mat, dtype=bool))
+            sns.heatmap(corr_mat, mask=mask, annot=True, fmt=".2f", cmap="coolwarm", vmin=-1, vmax=1, ax=ax_hm)
+            ax_hm.set_title(f"Correlação ({metodo_corr.capitalize()})", fontsize=11)
+            fig_hm.tight_layout()
+            st.pyplot(fig_hm)
+            plt.close(fig_hm)
 
-        amostra = (
-            df_filtrado[variavel]
-            .dropna()
-            .sample(min(500, df_filtrado[variavel].dropna().shape[0]), random_state=42)
-        )
-        if len(amostra) >= 8:
-            stat_sw, p_sw = stats.shapiro(amostra)
-            st.info(
-                f"Shapiro-Wilk em subamostra de {len(amostra)} observações de `{variavel}`: "
-                f"W = {stat_sw:.4f}, p-valor = {p_sw:.4g}. "
-                "Na EDA, os sinais operacionais não seguem normalidade estrita; "
-                "por isso privilegiamos mediana, IQR e testes não paramétricos."
-            )
+        with c_desc:
+            st.markdown("#### Estatística Descritiva & Assimetria")
+            desc_df = df_filtrado[vars_selecionadas].describe().T
+            desc_df["skewness"] = df_filtrado[vars_selecionadas].skew()
+            desc_df["kurtosis"] = df_filtrado[vars_selecionadas].kurtosis()
+            tabela_resumo = desc_df[["mean", "50%", "std", "skewness", "kurtosis"]].rename(columns={"50%": "median"}).round(2)
+            st.dataframe(tabela_resumo, use_container_width=True, height=330)
 
-with tab_rel:
-    st.subheader("Análise relacional")
-    st.write(
-        "Este separador cobre o princípio **relacional**: dispersão entre duas "
-        "variáveis quantitativas, correlação de Spearman (mais segura sem normalidade) "
-        "e associação entre fabricante e estado da bateria."
+        st.markdown("---")
+        st.markdown("#### 📈 Histogramas por Variável Quantitativa Avaliada")
+        
+        for col in vars_selecionadas:
+            fig_h, axes_h = plt.subplots(1, 2, figsize=(11, 3.5), sharex=True)
+            for ax, (cls, cor) in zip(axes_h, PALETA_ESTADO.items()):
+                sub = df_filtrado[df_filtrado["estado_bateria"] == cls]
+                sns.histplot(data=sub, x=col, kde=True, color=cor, ax=ax, element="step")
+                ax.set_title(f"{col} — {cls}")
+                ax.set_ylabel("Frequência")
+            fig_h.tight_layout()
+            st.pyplot(fig_h)
+            plt.close(fig_h)
+
+with tab2:
+    st.subheader("🚛 Painel Executivo: Gestores de Frota & Engenheiros de BMS")
+    st.markdown(
+        "**Público-Alvo:** Equipa de Operações de Frotas Elétricas e Engenharia de Fiabilidade.\n"
+        "*Foco:* Monitorização de risco de degradação prematura, ocorrências de falhas críticas e planeamento de substituição de packs."
     )
-
-    df_xy = df_filtrado.dropna(subset=[variavel, variavel_y, "estado_bateria"])
-    if df_xy.empty:
-        st.warning("Não há pares válidos no intervalo escolhido.")
+    st.markdown("---")
+    
+    st.markdown("#### 📌 KPIs Estratégicos (Métricas Próprias)")
+    
+    total_f = len(df_filtrado)
+    if total_f > 0:
+        p_deg = (df_filtrado["estado_bateria"] == "Degradada").mean() * 100
+        p_falha = df_filtrado["battery_failure"].mean() * 100 if "battery_failure" in df_filtrado.columns else 0.0
+        stress_medio = df_filtrado["battery_stress_index"].mean() if "battery_stress_index" in df_filtrado.columns else 0.0
+        ciclos_med = df_filtrado["predicted_remaining_life_cycles"].median() if "predicted_remaining_life_cycles" in df_filtrado.columns else 0.0
+        
+        if "BMS_warning_count" in df_filtrado.columns:
+            p_bms = (df_filtrado["BMS_warning_count"] >= 2).mean() * 100
+        else:
+            p_bms = 0.0
     else:
-        st.pyplot(figura_dispersao(df_xy, variavel, variavel_y), width="stretch")
+        p_deg = p_falha = stress_medio = ciclos_med = p_bms = 0.0
 
-        rho, p_rho = stats.spearmanr(df_xy[variavel], df_xy[variavel_y])
-        r_p, p_p = stats.pearsonr(df_xy[variavel], df_xy[variavel_y])
-        m1, m2 = st.columns(2)
-        m1.metric("Spearman ρ", f"{rho:.3f}", help=f"p-valor = {p_rho:.4g}")
-        m2.metric("Pearson r", f"{r_p:.3f}", help=f"p-valor = {p_p:.4g}")
+    k1, k2, k3, k4, k5 = st.columns(5)
+    k1.metric("1. Taxa de Degradação", f"{p_deg:.1f}%", help="Percentual com SoH < 80%.")
+    k2.metric("2. Falhas Críticas", f"{p_falha:.2f}%", help="Baterias em estado de falha registada.")
+    k3.metric("3. Índice Estresse Médio", f"{stress_medio:.1f} pts", help="Média do Battery Stress Index.")
+    k4.metric("4. Mediana Vida Restante", f"{ciclos_med:,.0f}", help="Ciclos estimados antes do fim de vida.")
+    k5.metric("5. Alertas BMS Elevados", f"{p_bms:.1f}%", help="Veículos com 2 ou mais avisos no BMS.")
 
-        saudavel = df_xy.loc[df_xy["estado_bateria"] == "Saudável", variavel]
-        degradada = df_xy.loc[df_xy["estado_bateria"] == "Degradada", variavel]
-        if len(saudavel) > 0 and len(degradada) > 0:
-            stat_u, p_u = stats.mannwhitneyu(saudavel, degradada, alternative="two-sided")
-            st.write(
-                f"**Mann-Whitney U** para `{variavel}` entre Saudável e Degradada: "
-                f"U = {stat_u:,.0f}, p-valor = {p_u:.4g}."
-            )
+    st.markdown("---")
+    st.markdown("#### 📊 Visuais de Suporte Operacional")
 
-    fig_hm, col_cat, contingencia = figura_heatmap_fabricante(
-        df_filtrado.dropna(subset=["estado_bateria"])
-    )
-    st.pyplot(fig_hm, width="stretch")
-    st.caption(
-        f"Tabela de contingência `{col_cat}` × estado da bateria "
-        "(amostra já filtrada pelo slider da barra lateral)."
-    )
-    st.dataframe(contingencia, width="stretch")
+    v1, v2 = st.columns(2)
+
+    with v1:
+        st.markdown("##### 1. Distribuição de Saúde por Fabricante")
+        if "battery_manufacturer" in df_filtrado.columns:
+            tab_fab = pd.crosstab(df_filtrado["battery_manufacturer"], df_filtrado["estado_bateria"], normalize="index") * 100
+            fig_v1, ax_v1 = plt.subplots(figsize=(6, 3.8))
+            tab_fab.plot(kind="bar", stacked=True, color=[COR_CONTEXTO, COR_DESTAQUE], ax=ax_v1)
+            ax_v1.set_ylabel("Percentagem (%)")
+            ax_v1.set_xlabel("Fabricante da Bateria")
+            ax_v1.legend(title="Estado")
+            ax_v1.tick_params(axis='x', rotation=25)
+            fig_v1.tight_layout()
+            st.pyplot(fig_v1)
+            plt.close(fig_v1)
+
+    with v2:
+        st.markdown("##### 2. Estresse da Bateria por Tipo de Tração")
+        col_drive = "drive_type" if "drive_type" in df_filtrado.columns else "vehicle_type"
+        if col_drive in df_filtrado.columns and "battery_stress_index" in df_filtrado.columns:
+            fig_v2, ax_v2 = plt.subplots(figsize=(6, 3.8))
+            sns.boxplot(data=df_filtrado, x=col_drive, y="battery_stress_index", hue="estado_bateria", palette=PALETA_ESTADO, ax=ax_v2)
+            ax_v2.set_ylabel("Battery Stress Index")
+            ax_v2.set_xlabel("Tipo de Tração")
+            ax_v2.legend(title="Estado")
+            fig_v2.tight_layout()
+            st.pyplot(fig_v2)
+            plt.close(fig_v2)
+
+    st.markdown("##### 3. Relação Operacional: Quilometragem vs. Contagem de Ciclos de Carga")
+    if all(c in df_filtrado.columns for c in ["odometer_km", "cycle_count"]):
+        fig_v3, ax_v3 = plt.subplots(figsize=(11, 4))
+        amostra_v3 = df_filtrado.sample(min(2000, len(df_filtrado)), random_state=42)
+        sns.scatterplot(
+            data=amostra_v3,
+            x="odometer_km",
+            y="cycle_count",
+            hue="estado_bateria",
+            palette=PALETA_ESTADO,
+            alpha=0.6,
+            ax=ax_v3
+        )
+        ax_v3.set_xlabel("Quilometragem (Odometer km)")
+        ax_v3.set_ylabel("Contagem de Ciclos (Cycle Count)")
+        ax_v3.legend(title="Estado da Bateria")
+        fig_v3.tight_layout()
+        st.pyplot(fig_v3)
+        plt.close(fig_v3)
 
 st.divider()
-st.markdown(
-    "Fonte dos dados: [EV Battery Health Prediction Dataset (20k)]"
-    "(https://www.kaggle.com/datasets/srisyra02/ev-battery-health-prediction-dataset-20k). "
-    "Notebook de EDA em `notebooks/`."
-)
+st.caption("Repositório configurado para entrega académica individual de EDA & Streamlit.")
