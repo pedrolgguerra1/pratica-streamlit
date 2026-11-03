@@ -1,13 +1,26 @@
+import copy
 import glob
 import os
 
 import kagglehub
+import matplotlib.path as mpath
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
 import streamlit as st
 from scipy import stats
+
+def _corrigir_deepcopy_path(self, memo=None):
+    if memo is None:
+        memo = {}
+    cls = type(self)
+    p = cls.__new__(cls)
+    memo[id(self)] = p
+    for k, v in self.__dict__.items():
+        setattr(p, k, copy.deepcopy(v, memo))
+    p._readonly = False
+    return p
 
 st.set_page_config(
     page_title="EDA — Saúde de Baterias de VEs",
