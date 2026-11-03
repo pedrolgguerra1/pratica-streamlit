@@ -2,7 +2,7 @@
 
 **Aplicação online:** *[(URL do Streamlit Cloud)](https://pedroloureirogalvaoguerra.streamlit.app/)*
 
-Dashboard interativo da análise exploratória de dados (EDA) sobre o conjunto [EV Battery Health Prediction Dataset (20k)](https://www.kaggle.com/datasets/srisyra02/ev-battery-health-prediction-dataset-20k), de Pedr0 (Pedro).
+Dashboard interativo da análise exploratória de dados (EDA) sobre o conjunto [EV Battery Health Prediction Dataset (20k)](https://www.kaggle.com/datasets/srisyra02/ev-battery-health-prediction-dataset-20k).
 
 O notebook completo está em `notebooks/`. Os rascunhos dos dois ecrãs estão em `entregas/`. Os prompts de IA usados para montar a aplicação estão em `prompts/documentacao_ia.md`.
 
@@ -38,7 +38,7 @@ O servidor abre em `http://localhost:8501`. O `app.py` descarrega o CSV automati
 app.py
 requirements.txt
 README.md
-notebooks/          # notebook da EDA
-entregas/           # rascunhos dos dois dashboards
-prompts/            # documentação dos prompts de IA
+notebooks/          
+entregas/           
+prompts/            
 ```
